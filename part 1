@@ -1,0 +1,73 @@
+Проверка на четность
+   
+: d dup 2 / 2 * = if ." четное" else ." нечетное" then ;  
+
+или
+
+: d 2 % if ." нечетное" else ." четное" then ;
+
+Проверка на простоту 
+
+: simple 0 swap dup 2 
+for 
+dup r@ % 
+if else 
+swap 1 + swap r> drop dup >r 
+then 
+endfor drop 
+if ." непростое число" else ." простое число" then
+cr ; 
+
+или функция, которую можно потом переиспользовать в дальнейшем
+
+: simple 0 swap dup 2 
+for 
+dup r@ % 
+if else 
+swap 1 + swap r> drop dup >r 
+then 
+endfor drop ; 
+
+: simple_res 
+simple
+if ." непростое число" else ." простое число" then
+cr ; 
+
+Напишите программу так, чтобы она выделяла с помощью allot ячейку в памяти, записывала туда результат и возвращала её адрес.
+
+(resVal - adr) 
+: my_allot 1 allot dup rot swap ! ;
+
+Конкатенацию двух слов
+
+m" begin" m" end" 
+
+: concat
+2dup count swap count + 
+heap-alloc
+dup >r
+rot 2dup dup count >r >r >r string-copy
+r> r> heap-free r> + 
+swap dup >r string-copy 
+r> heap-free r> prints ;
+
+Напишите слово, которое проведёт проверку числа на примарность.
+Примарным называется число, которое представляется в виде произведения простых без по-второв.
+
+: degree 
+dup * % 
+;
+
+: f 0 swap dup 2 
+for 
+  r@ simple 
+  if 
+  else 
+    dup r@ degree 
+    if 
+    else 
+      swap 1 + swap r> drop dup >r 
+    then 
+  then 
+endfor drop 
+if ." число непримарное" else ." число примарное" then ;
