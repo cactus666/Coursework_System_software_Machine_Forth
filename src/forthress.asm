@@ -1,257 +1,115 @@
+%define pc r12
+%define w r13
+%define rstack r14
+
+%include "macro.inc"
+%include "util.inc"
+;%include "kernel.inc"   ;  Minimal word set is here
+%include "words.inc"    ;  Predefined words are here
+
+section .data
+xt_exit: 	    dq exit
+stub:           dq 0
+xt_interpreter: dq .interpreter
+.interpreter:   dq interpreter_loop
+last_word:      dq link
+rsp_b:          dq 0
+no_word: 	db ' : There is no such word', 10, 0
+here: 		dq dict
+
 section .text
+global _start
+_start:
+        mov rstack, rs + 65536 * word_size
+        mov [rsp_b], rsp
+        mov pc, xt_interpreter
+        jmp next
 
-string_length:
-	xor rax, rax
-.loop:
-	cmp byte [rdi+rax], 0
-	jz .end
-	inc rax
-	jmp .loop
-.end:
-	ret
-	
-print_newline:
-    mov rdi, 0xA
-	call print_char
-    ret
-    
-print_char:
-	push rdi
-	mov rsi, rsp
-	mov rax, 1
-	mov rdx, 1
-	mov rdi, 1
-	syscall
-	pop rdi
-	ret
+compilation:
+    	cmp qword [state], 1
+    	jne interpreter_loop
+        mov rdi, word_buffer
+        call read_word
+        call find_word                  ; try as defined word 
+        test rax, rax
+    	jz .parse_number               ; if word is not in dict - try parse as number
+    	mov rdi, rax
+    	call cfa                       ; else rax <- xt_word
+    	cmp byte [rax - 1], 1          ; check as immediate
+    	je .immediate               
+    	mov rdi, [here]			; else add xt to here
+        mov [rdi], rax              	
+        add qword [here], word_size
+    	jmp compilation
 
-print_string:
-	push rdi
-	call string_length
-	pop rsi
-	mov rdx, rax
-	mov rax, 1
-	mov rdi, 1
-	syscall
-	ret
+.parse_number:
+    	mov rdi, word_buffer
+    	call parse_int
 
-print_int:
-    test rdi, rdi
-	jns .plus
-	jmp .minus
-.plus:
-	call print_uint
-    ret
-.minus:
-	push rdi
-	mov rdi, '-'
-	call print_char
-	pop rdi
-	neg rdi
-	jmp .plus
+    	test rdx, rdx
+    	jz .no_word
 
-print_uint:
-	mov rax, rdi
-	xor r8, r8
-	mov rbx, 10
-.loop:
-	xor rdx, rdx
-	div rbx
-	push rdx
-	inc r8
-	test rax, rax
-	jnz .loop
-	mov rax, 1
-	mov rdx, 1
-	mov rdi, 1
-.print:
-	pop r10
-	add r10, '0'
-	push r10
-	mov rsi, rsp
-	syscall
-	pop r10
-	dec r8
-	test r8, r8
-	jnz .print
-	ret
+        mov rdi, [here]
+    	cmp qword [rdi - word_size], xt_branch	; check if prev == branch/branch0
+        je .branch
+        cmp qword [rdi - word_size], xt_branch0
+        je .branch
 
-parse_uint:
-	xor r9, r9
-	mov r9, 10d
-   	xor rax, rax
-	xor r8, r8
-	xor r11, r11
-.loop:
-	xor r10, r10
-	mov r10b, byte[rdi+r11]
-	inc r11
-.below:
-	cmp r10b, '0'
-	jb .end
-.above:
-	cmp r10b, '9'
-	ja .end
-.value:
-	sub r10b, '0'
-	mul r9
-	add rax, r10
-	inc r8
-	jmp .loop
-.end:
-	mov rdx, r8
-	ret
+    	mov rdi, [here]			; else add xt_lit
+    	mov qword [rdi], xt_lit     	
+    	add qword [here], word_size
+    	
+.branch:
+        mov rdi, [here]			; add num
+        mov [rdi], rax
+        add qword [here], word_size
+        jmp compilation
+        
+.immediate:
+    	mov [stub], rax
+    	mov pc, stub
+    	jmp next
+    	
+.no_word:
+        call print_no_word
+    	mov pc, xt_interpreter
+        jmp next
+        
+interpreter_loop:
+        cmp qword [state], 0
+        jne compilation
+        mov rdi, word_buffer
+        call read_word 
+        call find_word              ; try as defined word
+        test rax, rax
+        jz .parse_number            ; if word is not in dict - try parse as number
+        mov rdi, rax
+        call cfa                    ; else rax <- xt_word
+        mov [stub], rax
+        mov pc, stub                ; ptr to next ex token = found xt_word
+        jmp next
+        
+.parse_number:
+        mov rdi, word_buffer
+        call parse_int
+        test rdx, rdx
+        jz .no_word
+        push rax
+        mov pc, xt_interpreter
+        jmp next
+        
+.no_word:
+        call print_no_word
+        mov pc, xt_interpreter
+        jmp next
 
-parse_int:
-	xor r8, r8
-	xor rax, rax
-	cmp byte [rdi], '-'
-	jz .minus
-	call parse_uint
-	ret
-.minus:
-	lea rdi, [rdi+1]
-	call parse_uint
-	test rdx, rdx
-	jz .end
-	neg rax
-	inc rdx
-	ret
-.end:
-	xor rdx, rdx
-	ret
-	
-string_equals:
-    mov al, byte [rdi]
-    cmp al, byte [rsi]
-jne .fail
-    inc rdi
-    inc rsi
-    test al, al
-    jnz string_equals
-    mov rax, 1
-    ret
-.fail:
-    xor rax, rax
-    ret
+next:
+    	mov w, pc		; ptr to current xt_word
+    	add pc, word_size		; set pc as ptr to next xt (xt_interpreter / (xt_word or xt_exit) for colon)
+    	mov w, [w]		; ptr to word_impl or docol
+    	jmp [w]			; jmp to word_impl or docol
 
-read_char:
-	xor rax, rax
-	push rax
-	mov rax, 0
-	mov rsi, rsp
-	mov rdi, 0
-	mov rdx, 1
-	syscall
-	pop rax
-	ret
-
-read_word:
-    push r14
-    xor r14, r14 
-
-    .A:
-    push rdi
-    call read_char
-    pop rdi
-    cmp al, ' '
-    je .A
-    cmp al, 10
-    je .A
-    cmp al, 13
-    je .A 
-    cmp al, 9 
-    je .A
-    test al, al
-    jz .C
-
-    .B:
-    mov byte [rdi + r14], al
-    inc r14
-
-    push rdi
-    call read_char
-    pop rdi
-    cmp al, ' '
-    je .C
-    cmp al, 10
-    je .C
-    cmp al, 13
-    je .C 
-    cmp al, 9
-    je .C
-    test al, al
-    jz .C
-    cmp r14, 254
-    je .C 
-
-    jmp .B
-
-    .C:
-    mov byte [rdi + r14], 0
-    mov rax, rdi 
-   
-    mov rdx, r14 
-    pop r14
-    ret
-
-string_copy:
-    push rdi
-    push rsi
-    call string_length
-    xor r10, r10
-    xor r11, r11
-    pop rsi
-    pop rdi
-.loop:
-    cmp rax, r10
-    jae .copy
-    jmp .end
-.copy:
-    mov r11, [rdi+r10]
-    mov qword [rsi], r11
-    inc rsi
-    inc r10
-    jmp .loop
-.end:
-    ret
-   
-
-
-print_no_word:
-    mov rdi, word_buffer
-    call print_string
-    mov rdi, no_word
-    call print_string
-    ret
-    
-cfa:
-    add rdi, 9
-    call string_length
-    add rdi, rax
-    add rdi, 2
-    mov rax, rdi
-    ret
-    
-find_word:
-    xor eax, eax
-    mov rsi, [last_word]
-.loop:
-    push rdi
-    push rsi
-    add rsi, 9
-    call string_equals
-    pop rsi
-    pop rdi
-    test rax, rax
-    jnz .found
-    mov rsi, [rsi]
-    test rsi, rsi
-    jnz .loop
-    xor rax, rax
-    ret
-.found:
-    mov rax, rsi
-    ret
-
-
+exit:
+        mov pc, [rstack]	; restore ptr to next xt
+        add rstack, word_size		
+        jmp next
